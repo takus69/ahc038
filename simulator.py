@@ -21,11 +21,10 @@ def main(i):
     r = run(i)
     t = round(time.time()-start, 4)
     N = r['N']
-    cost = r['cost']
+    M = r['M']
+    V = r['V']
     score = r['score']
-    opt_cost = r['opt_cost']
-    opt_score = r['opt_score']
-    data = [i, N, cost, score, opt_cost, opt_score, t]
+    data = [i, N, M, V, score, t]
     print('\r', 'end', i, end='')
     # print(i, 'end')
     return data
@@ -47,7 +46,7 @@ if __name__ == '__main__':
         result = [d.get() for d in data]
     print()
     # '''
-    df = pd.DataFrame(result, columns=['i', 'N', 'cost', 'score', 'opt_cost', 'opt_score', 'time'])
+    df = pd.DataFrame(result, columns=['i', 'N', 'M', 'V', 'score', 'time'])
     score = np.mean(df['score'])
     sum_score = score * 50
     print(f"score: {format(int(sum_score), ',')}, score mean: {format(int(score), ',')}")
