@@ -44,7 +44,7 @@ impl RobotArm {
         dir.0*dir2.0 + dir.1*dir2.1
     }
 
-    fn r#move(&mut self, (tx, ty): (i8, i8)) -> Vec<String> {
+    fn r#move(&mut self, (tx, ty): (i8, i8), next: &(i8, i8)) -> Vec<String> {
         let mut ops: Vec<Vec<char>> = Vec::new();
         let DIRS = [(-1, 0), (0, 1), (1, 0), (0, -1)];
         
@@ -58,28 +58,33 @@ impl RobotArm {
 
             // (tx, ty)-rootがアームの最大長より長い場合、もしくは、アームの最大長と偶奇が一致していない場合は移動する
             let diff = self.dist(self.root, (tx, ty));
+            let next_diff = self.dist(self.root, *next);
+            let mut opt_eval = 0;
+            let mut opt_root = self.root;
+            let mut opt_o_s = '.';
             // println!("long: {}, diff: {}, root: {:?}, target: {:?}", self.long, diff, self.root, (tx, ty));
             if diff > self.long || diff%2 != self.long%2 || self.root == (tx, ty) {
                 for d in 0..4 {
                     let tmp_root = self.add(self.root, DIRS[d]);
                     if tmp_root.0 < 0 || tmp_root.0 >= self.n as i8 || tmp_root.1 < 0 || tmp_root.1 >= self.n as i8 { continue; }  // rootが枠外の場合は不採用
                     let tmp_diff = self.dist((tx, ty), tmp_root);
-                    let mut ok = false;  // 移動を採用するかのフラグ
-                    if diff > self.long && diff > tmp_diff { ok = true; }
-                    if self.long >= tmp_diff { ok = true; }
-                    if ok {
-                        let o_s = match d {
+                    let mut eval = if diff > self.long && diff > tmp_diff { 10 } else { 0 };
+                    eval = if self.long >= tmp_diff { 10 } else { eval };
+                    if self.dist(tmp_root, *next) < next_diff { eval *= 2; }
+                    if eval > opt_eval {
+                        opt_eval = eval;
+                        opt_root = tmp_root;
+                        opt_o_s = match d {
                             0 => 'U',
                             1 => 'R',
                             2 => 'D',
                             3 => 'L',
                             _ => '.',
                         };
-                        op.push(o_s);
-                        self.root = tmp_root;
-                        break;
                     }
                 }
+                op.push(opt_o_s);
+                self.root = opt_root;
             } else {
                 op.push('.');
             }
@@ -209,13 +214,14 @@ impl Solver {
             }
             let start = self.decide_start(&target, &fixed);
             // println!("start: {:?}, target: {:?}", start, target);
-            let ops = arm.r#move(start);
+            let ops = arm.r#move(start, &target);
             self.op.extend(ops);
             if start == arm.leaf {
                 self.s[start.0 as usize][start.1 as usize] = false;
             }
             // println!("get: {:?}", arm.leaf);
-            let ops = arm.r#move(target);
+            let next = if i < self.n-1 { self.decide_start(&t_tako[i+1], &fixed)} else { (0, 0) };
+            let ops = arm.r#move(target, &next);
             self.op.extend(ops);
             if target == arm.leaf {
                 self.s[target.0 as usize][target.1 as usize] = true;
@@ -227,18 +233,31 @@ impl Solver {
     }
 
     fn decide_start(&self, target: &(i8, i8), fixed: &[Vec<bool>]) -> (i8, i8) {
-        let mut dist = usize::MAX;
+        let mut dist = self.n*2;
         let (mut x, mut y) = (0, 0);
+        let mut dist2 = self.n*2;
+        let (mut x2, mut y2) = (0, 0);
         for i in 0..self.n {
             for j in 0..self.n {
                 if !self.s[i][j] { continue; }
-                if self.t[i][j] || fixed[i][j] { continue; }
+                if fixed[i][j] { continue; }
+                if self.t[i][j] {
+                    let tmp_dist = self.dist(target, &(i as i8, j as i8));
+                    if dist2 > tmp_dist {
+                        dist2 = tmp_dist;
+                        (x2, y2) = (i, j);
+                    }
+                    continue;
+                }
                 let tmp_dist = self.dist(target, &(i as i8, j as i8));
                 if dist > tmp_dist {
                     dist = tmp_dist;
                     (x, y) = (i, j);
                 }
             }
+        }
+        if (dist*2).max(4) > (dist2*2).max(4)+16 {
+            (x, y) = (x2, y2);
         }
 
         (x as i8, y as i8)
@@ -338,16 +357,16 @@ mod tests {
         let mut arm = RobotArm::new(n, (x, y), v);
         assert_eq!(arm.root, (0, 0));
         assert_eq!(arm.leaf, (0, 3));
-        let mut ops = arm.r#move((1, 2));
+        let mut ops = arm.r#move((1, 2), &(0, 0));
         assert_eq!(arm.leaf, (1, 2));
         assert_eq!(ops.len(), 1);
-        let mut ops = arm.r#move((3, 0));
+        let mut ops = arm.r#move((3, 0), &(0, 0));
         assert_eq!(arm.leaf, (3, 0));
         assert_eq!(ops.len(), 1);
-        let mut ops = arm.r#move((6, 0));
+        let mut ops = arm.r#move((6, 0), &(0, 0));
         assert_eq!(arm.leaf, (6, 0));
         println!("end (6, 0)");
-        let mut ops = arm.r#move((0, 0));
+        let mut ops = arm.r#move((0, 0), &(0, 0));
         println!("end (0, 0)");
         assert_eq!(arm.leaf, (0, 0));
     }
