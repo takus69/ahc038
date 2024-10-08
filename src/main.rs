@@ -180,47 +180,34 @@ struct Solver {
 impl Solver {
     fn solve(&mut self) {
         // たこ焼きの処理順を決定
-        let s_center = self.center(&self.s);
-        // println!("center of s: {:?}", s_center);
-        let t_center = self.center(&self.t);
-        // println!("center of t: {:?}", t_center);
-        let start_dir: (i8, i8) = (
-            if s_center.0 < t_center.0 { 1 } else { -1 },
-            if s_center.1 < t_center.1 { 1 } else { -1 },
-        );
-        let sign = start_dir.0*start_dir.1;
-        let mut s_tako: VecDeque<(i8, i8)> = VecDeque::new();
-        let mut t_tako: VecDeque<(i8, i8)> = VecDeque::new();
-        let mut order: Vec<(usize, usize)> = Vec::new();
-        for sum in 0..(2*self.n-1) {
-            for i in 0..=sum.min(self.n-1) {
-                if sign < 0 && sum+1 > i+self.n { continue; }
-                let j = if sign > 0 { sum - i } else { i+self.n-1-sum };
-                if j < self.n {
-                    order.push((i, j));
+        let mut t_tako: Vec<(i8, i8)> = Vec::new();
+        for j in 0..self.n {
+            if j%2 == 0 {
+                for i in 0..self.n {
+                    if self.t[i][j] { t_tako.push((i as i8, j as i8)); }
+                }
+            } else {
+                for i in (0..self.n).rev() {
+                    if self.t[i][j] { t_tako.push((i as i8, j as i8)); }
                 }
             }
         }
-        if start_dir.0 < 0 { order.reverse(); }
-        for &(i, j) in order.iter() {
-            // すでに目的地にたこ焼きがある場合は、処理対象から外す
-            if self.s[i][j] && self.t[i][j] {
-                continue;
-            }
-            if self.s[i][j] { s_tako.push_front((i as i8, j as i8)); }
-            if self.t[i][j] { t_tako.push_front((i as i8, j as i8)); }
-        }
 
         // アームの初期化
-        (self.x, self.y) = s_center;
+        (self.x, self.y) = t_tako[0];
         let mut arm = RobotArm::new(self.n, (self.x, self.y), self.v);
         self.v2 = arm.v2;
         self.p_l.clone_from(&arm.p_l);
 
         // 処理
-        while !s_tako.is_empty() {
-            let start = s_tako.pop_back().unwrap();
-            let target = t_tako.pop_back().unwrap();
+        let mut fixed: Vec<Vec<bool>> = vec![vec![false; self.n]; self.n];  // 配置が確定したたこ焼き
+        for i in 0..self.m {
+            let target = t_tako[i];
+            if self.s[target.0 as usize][target.1 as usize] {
+                fixed[target.0 as usize][target.1 as usize] = true;
+                continue;
+            }
+            let start = self.decide_start(&target, &fixed);
             // println!("start: {:?}, target: {:?}", start, target);
             let ops = arm.r#move(start);
             self.op.extend(ops);
@@ -232,10 +219,33 @@ impl Solver {
             self.op.extend(ops);
             if target == arm.leaf {
                 self.s[target.0 as usize][target.1 as usize] = true;
+                fixed[target.0 as usize][target.1 as usize] = true;
             }
             // println!("put: {:?}", arm.leaf);
         }
         
+    }
+
+    fn decide_start(&self, target: &(i8, i8), fixed: &[Vec<bool>]) -> (i8, i8) {
+        let mut dist = usize::MAX;
+        let (mut x, mut y) = (0, 0);
+        for i in 0..self.n {
+            for j in 0..self.n {
+                if !self.s[i][j] { continue; }
+                if self.t[i][j] || fixed[i][j] { continue; }
+                let tmp_dist = self.dist(target, &(i as i8, j as i8));
+                if dist > tmp_dist {
+                    dist = tmp_dist;
+                    (x, y) = (i, j);
+                }
+            }
+        }
+
+        (x as i8, y as i8)
+    }
+
+    fn dist(&self, p1: &(i8, i8), p2: &(i8, i8)) -> usize {
+        (p1.0.abs_diff(p2.0) + p1.1.abs_diff(p2.1)) as usize
     }
 
     fn center(&self, s: &Vec<Vec<bool>>) -> (i8, i8) {
