@@ -180,6 +180,7 @@ impl RobotArm {
     }
 }
 
+#[derive(Clone)]
 struct Solver {
     n: usize,
     m: usize,
@@ -278,6 +279,115 @@ impl Solver {
             if target == arm.leaf {
                 self.s[target.0 as usize][target.1 as usize] = true;
                 tako[next_tako_i] = target;
+            }
+            // println!("put: {:?}", arm.leaf);
+        }
+        
+    }
+
+    fn solve_v1(&mut self) {
+        // たこ焼きの処理順を決定
+        let (s_center, _) = self.center(&self.s, &self.t);
+        // println!("center of s: {:?}", s_center);
+        let (t_center, _) = self.center(&self.t, &self.s);
+        // println!("center of t: {:?}", t_center);
+        let start_dir: (i8, i8) = (
+            if s_center.0 < t_center.0 { 1 } else { -1 },
+            if s_center.1 < t_center.1 { 1 } else { -1 },
+        );
+        let sign = start_dir.0*start_dir.1;
+        let mut s_tako: VecDeque<(i8, i8)> = VecDeque::new();
+        let mut t_tako: VecDeque<(i8, i8)> = VecDeque::new();
+        let mut order: Vec<(usize, usize)> = Vec::new();
+        for sum in 0..(2*self.n-1) {
+            for i in 0..=sum.min(self.n-1) {
+                if sign < 0 && sum+1 > i+self.n { continue; }
+                let j = if sign > 0 { sum - i } else { i+self.n-1-sum };
+                if j < self.n {
+                    order.push((i, j));
+                }
+            }
+        }
+        if start_dir.0 < 0 { order.reverse(); }
+        for &(i, j) in order.iter() {
+            // すでに目的地にたこ焼きがある場合は、処理対象から外す
+            if self.s[i][j] && self.t[i][j] {
+                continue;
+            }
+            if self.s[i][j] { s_tako.push_front((i as i8, j as i8)); }
+            if self.t[i][j] { t_tako.push_front((i as i8, j as i8)); }
+        }
+
+        // アームの初期化
+        (self.x, self.y) = s_center;
+        let mut arm = RobotArm::new(self.n, (self.x, self.y), self.v);
+        self.v2 = arm.v2;
+        self.p_l.clone_from(&arm.p_l);
+
+        // 処理
+        while !s_tako.is_empty() {
+            let start = s_tako.pop_back().unwrap();
+            let target = t_tako.pop_back().unwrap();
+            // println!("start: {:?}, target: {:?}", start, target);
+            let ops = arm.r#move(start, &start);
+            self.op.extend(ops);
+            if start == arm.leaf {
+                self.s[start.0 as usize][start.1 as usize] = false;
+            }
+            // println!("get: {:?}", arm.leaf);
+            let ops = arm.r#move(target, &target);
+            self.op.extend(ops);
+            if target == arm.leaf {
+                self.s[target.0 as usize][target.1 as usize] = true;
+            }
+            // println!("put: {:?}", arm.leaf);
+        }
+        
+    }
+
+    fn solve_v2(&mut self) {
+        // たこ焼きの処理順を決定
+        let mut t_tako: Vec<(i8, i8)> = Vec::new();
+        for j in 0..self.n {
+            if j%2 == 0 {
+                for i in 0..self.n {
+                    if self.t[i][j] { t_tako.push((i as i8, j as i8)); }
+                }
+            } else {
+                for i in (0..self.n).rev() {
+                    if self.t[i][j] { t_tako.push((i as i8, j as i8)); }
+                }
+            }
+        }
+
+        // アームの初期化
+        (self.x, self.y) = t_tako[0];
+        let mut arm = RobotArm::new(self.n, (self.x, self.y), self.v);
+        self.v2 = arm.v2;
+        self.p_l.clone_from(&arm.p_l);
+
+        // 処理
+        let mut fixed: Vec<Vec<bool>> = vec![vec![false; self.n]; self.n];  // 配置が確定したたこ焼き
+        for i in 0..self.m {
+            let target = t_tako[i];
+            if self.s[target.0 as usize][target.1 as usize] {
+                fixed[target.0 as usize][target.1 as usize] = true;
+                continue;
+            }
+            let start = self.decide_start(&target, &fixed);
+            // println!("start: {:?}, target: {:?}", start, target);
+            let ops = arm.r#move(start, &target);
+            self.op.extend(ops);
+            if start == arm.leaf {
+                self.s[start.0 as usize][start.1 as usize] = false;
+            }
+            // println!("get: {:?}", arm.leaf);
+            let next = if i < self.n-1 { self.decide_start(&t_tako[i+1], &fixed)} else { (0, 0) };
+            let ops = arm.r#move(target, &next);
+            self.op.extend(ops);
+            if target == arm.leaf {
+                self.s[target.0 as usize][target.1 as usize] = true;
+                fixed[target.0 as usize][target.1 as usize] = true;
             }
             // println!("put: {:?}", arm.leaf);
         }
@@ -389,16 +499,7 @@ impl Solver {
         ((c_x as i8, c_y as i8), cnt)
     }
 
-    fn ans(&self) {
-        println!("{}", self.v2);
-        for (p, l) in self.p_l.iter() {
-            println!("{} {}", p, l);
-        }
-        println!("{} {}", self.x, self.y);
-        for s in self.op.iter() {
-            println!("{}", s);
-        }
-
+    fn score(&self) -> usize {
         // スコア出力
         let mut correct = 0;
         for i in 0..self.n {
@@ -409,6 +510,20 @@ impl Solver {
             }
         }
         let score = if correct == self.m { self.op.len() } else { 100000 + 1000*(self.m - correct)};
+        score
+    }
+
+    fn ans(&self) {
+        println!("{}", self.v2);
+        for (p, l) in self.p_l.iter() {
+            println!("{} {}", p, l);
+        }
+        println!("{} {}", self.x, self.y);
+        for s in self.op.iter() {
+            println!("{}", s);
+        }
+
+        let score = self.score();
         eprintln!("{{ \"N\": {}, \"M\": {}, \"V\": {}, \"score\": {} }}", self.n, self.m, self.v, score);
     }
 }
@@ -446,8 +561,27 @@ fn parse_input() -> Solver {
 
 fn main() {
     let mut solver = parse_input();
-    solver.solve();
-    solver.ans();
+    
+    let mut run_solver = solver.clone();
+    run_solver.solve();
+    let mut opt_score = run_solver.score();
+    let mut opt_solver = run_solver;
+
+    let mut run_solver = solver.clone();
+    run_solver.solve_v1();
+    if opt_score > run_solver.score() {
+        opt_score = run_solver.score();
+        opt_solver = run_solver;
+    }
+
+    let mut run_solver = solver.clone();
+    run_solver.solve_v2();
+    if opt_score > run_solver.score() {
+        opt_score = run_solver.score();
+        opt_solver = run_solver;
+    }
+    
+    opt_solver.ans();
 }
 
 // tests
