@@ -44,6 +44,17 @@ impl RobotArm {
         dir.0*dir2.0 + dir.1*dir2.1
     }
 
+    fn next_node_dir_is_ok(&self, dir: usize, i: usize, now: (i8, i8), target: (i8, i8)) -> bool {
+        // 折りたたんでいる場合に、目的地に近づけない場合に、次のノードが近づく方を選択するための処理
+        let DIRS = [(-1, 0), (0, 1), (1, 0), (0, -1)];
+        if i >= self.nodes.len()-1 {
+            false
+        } else {
+            let next_node_dir = (dir + self.nodes[i+1])%4;
+            self.is_same_dir(DIRS[next_node_dir], now, target)
+        }
+    }
+
     fn r#move(&mut self, (tx, ty): (i8, i8), next: &(i8, i8)) -> Vec<String> {
         let mut ops: Vec<Vec<char>> = Vec::new();
         let DIRS = [(-1, 0), (0, 1), (1, 0), (0, -1)];
@@ -110,9 +121,9 @@ impl RobotArm {
                     // 方向の重みづけ
                     let mut tmp_eval = match (self.nodes[i] + r) % 4 {
                         0 => 30,
-                        1 => 20,
+                        1 => 20 + if self.next_node_dir_is_ok(tmp_dir, i, self.add(now, DIRS[tmp_dir]), (tx, ty)) { 5 } else { 0 },
                         2 => 10,
-                        3 => 20,
+                        3 => 20 + if self.next_node_dir_is_ok(tmp_dir, i, self.add(now, DIRS[tmp_dir]), (tx, ty)) { 5 } else { 0 },
                         _ => 0,
                     };
                     if i == 0 {
@@ -184,35 +195,76 @@ struct Solver {
 
 impl Solver {
     fn solve(&mut self) {
-        // たこ焼きの処理順を決定
-        let mut t_tako: Vec<(i8, i8)> = Vec::new();
-        for j in 0..self.n {
-            if j%2 == 0 {
-                for i in 0..self.n {
-                    if self.t[i][j] { t_tako.push((i as i8, j as i8)); }
-                }
-            } else {
-                for i in (0..self.n).rev() {
-                    if self.t[i][j] { t_tako.push((i as i8, j as i8)); }
-                }
-            }
-        }
+        // たこ焼きと目的地の場所
+        let mut tako: Vec<(i8, i8)> = self.pos(&self.s);
+        let dest: Vec<(i8, i8)> = self.pos(&self.t);
 
         // アームの初期化
-        (self.x, self.y) = t_tako[0];
+        let (s_cm, s_cnt) = self.center(&self.s, &self.t);
+        (self.x, self.y) = s_cm;
         let mut arm = RobotArm::new(self.n, (self.x, self.y), self.v);
         self.v2 = arm.v2;
         self.p_l.clone_from(&arm.p_l);
 
         // 処理
-        let mut fixed: Vec<Vec<bool>> = vec![vec![false; self.n]; self.n];  // 配置が確定したたこ焼き
-        for i in 0..self.m {
-            let target = t_tako[i];
-            if self.s[target.0 as usize][target.1 as usize] {
-                fixed[target.0 as usize][target.1 as usize] = true;
-                continue;
+        for _ in 0..self.m {
+            // 重心を算出
+            let (s_cm, s_cnt) = self.center(&self.s, &self.t);
+            if s_cnt == 0 { break; }
+            let (t_cm, t_cnt) = self.center(&self.t, &self.s);
+            let dir_st = self.dir(&s_cm, &t_cm);
+
+            // 次のたこ焼きを決定
+            let mut next_tako_i = 0;
+            let mut next_tako = tako[next_tako_i];
+            let mut opt_eval = f64::MIN;
+            for i in 0..self.m {
+                // コスト算出
+                // たこ焼きまでの移動
+                let dist = self.dist(&arm.root, &tako[i]);
+                let mut cost = (if dist > arm.long { dist - arm.long } else { 0 }).max(2);
+                // たこ焼きから目的地の重心までの移動
+                let dist = self.dist(&tako[i], &t_cm);
+                cost += (if dist > arm.long { dist - arm.long } else { 0 }).max(2);
+
+                // 利益算出
+                let (x, y) = tako[i];
+                let benefit = if !self.t[x as usize][y as usize] { self.each_debt(&tako[i], &s_cm, &dir_st) } else { 0 };
+
+                let eval = benefit as f64 / cost as f64;
+                // println!("i: {}, tako: {:?}, eval: {}, benefit: {}, cost: {}", i, tako[i], eval, benefit, cost);
+                if eval > opt_eval {
+                    opt_eval = eval;
+                    next_tako = tako[i];
+                    next_tako_i = i;
+                }
             }
-            let start = self.decide_start(&target, &fixed);
+
+            // 次の目的地を決める
+            let mut next_dest = dest[0];
+            let mut opt_eval = f64::MIN;
+            for i in 0..self.m {
+                // コスト算出
+                // たこ焼きから目的地までの移動
+                let dist = self.dist(&next_tako, &dest[i]);
+                let mut cost = (if dist > arm.long { dist - arm.long } else { 0 }).max(2);
+                // 目的地からたこ焼きの重心までの移動
+                let dist = self.dist(&dest[i], &s_cm);
+                cost += (if dist > arm.long { dist - arm.long } else { 0 }).max(2);
+
+                // 利益算出
+                let (x, y) = dest[i];
+                let benefit = if !self.s[x as usize][y as usize] { self.each_debt(&dest[i], &t_cm, &dir_st) } else { 0 };
+
+                let eval = benefit as f64 / cost as f64;
+                if eval > opt_eval {
+                    opt_eval = eval;
+                    next_dest = dest[i];
+                }
+            }
+
+            let target = next_dest;
+            let start = next_tako;
             // println!("start: {:?}, target: {:?}", start, target);
             let ops = arm.r#move(start, &target);
             self.op.extend(ops);
@@ -220,16 +272,66 @@ impl Solver {
                 self.s[start.0 as usize][start.1 as usize] = false;
             }
             // println!("get: {:?}", arm.leaf);
-            let next = if i < self.n-1 { self.decide_start(&t_tako[i+1], &fixed)} else { (0, 0) };
+            let next = (0, 0);
             let ops = arm.r#move(target, &next);
             self.op.extend(ops);
             if target == arm.leaf {
                 self.s[target.0 as usize][target.1 as usize] = true;
-                fixed[target.0 as usize][target.1 as usize] = true;
+                tako[next_tako_i] = target;
             }
             // println!("put: {:?}", arm.leaf);
         }
         
+    }
+
+    fn pos(&self, s: &Vec<Vec<bool>>) -> Vec<(i8, i8)> {
+        let mut pos: Vec<(i8, i8)> = Vec::new();
+
+        for i in 0..self.n {
+            for j in 0..self.n {
+                if s[i][j] {
+                    pos.push((i as i8, j as i8));
+                }
+            }
+        }
+
+        pos
+    }
+
+    fn each_debt(&self, s: &(i8, i8), cm: &(i8, i8), dir_st: &(i8, i8)) -> usize {
+        if s == cm { return 1; }
+        let dir = self.dir(cm, s);
+        let dot = (dir.0*dir_st.0) + (dir.1*dir_st.1);
+        let w = if dot < 0 { 4 } else if dot == 0 { 2 } else { 1 };
+        w * self.dist(s, cm)
+        
+    }
+
+    fn debt(&self, s: &Vec<Vec<bool>>, t: &Vec<Vec<bool>>, dir_st: &(i8, i8)) -> usize {
+        // sの重心からの距離(最小2)の和を負債とする
+        // ただしtと一致している場合は負債とみなさない
+        // sの重心から見て、s->tの方向と真逆は4倍、両脇は2倍、同じ方向は1倍の重みを付ける
+        let mut debt: usize = 0;
+
+        let (s_cm, _) = self.center(s, t);
+        for i in 0..self.n {
+            for j in 0..self.n {
+                let (x, y) = (i as i8, j as i8);
+                if s[i][j] && !t[i][j] {
+                    debt += self.each_debt(&(x, y), &s_cm, dir_st);
+                }
+            }
+        }
+
+        debt
+    }
+
+    fn dir(&self, s: &(i8, i8), t: &(i8, i8)) -> (i8, i8) {
+        // sからtの方向を1, 0, -1で算出
+        let x = if s.0 < t.0 { 1 } else if s.0 > t.0 { -1 } else { 0 };
+        let y = if s.1 < t.1 { 1 } else if s.1 > t.1 { -1 } else { 0 };
+        
+        (x, y)
     }
 
     fn decide_start(&self, target: &(i8, i8), fixed: &[Vec<bool>]) -> (i8, i8) {
@@ -267,20 +369,24 @@ impl Solver {
         (p1.0.abs_diff(p2.0) + p1.1.abs_diff(p2.1)) as usize
     }
 
-    fn center(&self, s: &Vec<Vec<bool>>) -> (i8, i8) {
+    fn center(&self, s: &Vec<Vec<bool>>, t: &Vec<Vec<bool>>) -> ((i8, i8), usize) {
         let (mut c_x, mut c_y) = (0, 0);
+        let mut cnt = 0;
         for x in 0..self.n {
             for y in 0..self.n {
-                if s[x][y] {
+                // たこ焼きと目的地が一致していない場合のみ重心を算出
+                if s[x][y] && !t[x][y] {
                     c_x += x;
                     c_y += y;
+                    cnt += 1;
                 }
             }
         }
-        c_x /= self.m;
-        c_y /= self.m;
+        if cnt == 0 { return ((-1, -1), 0); }
+        c_x /= cnt;
+        c_y /= cnt;
 
-        (c_x as i8, c_y as i8)
+        ((c_x as i8, c_y as i8), cnt)
     }
 
     fn ans(&self) {
