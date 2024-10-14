@@ -202,68 +202,100 @@ impl Solver {
 
         // アームの初期化
         let (s_cm, s_cnt) = self.center(&self.s, &self.t);
-        let s_cm = (s_cm.0 as i8, s_cm.1 as i8);
-        (self.x, self.y) = s_cm;
+        (self.x, self.y) = (s_cm.0 as i8, s_cm.1 as i8);
         let mut arm = RobotArm::new(self.n, (self.x, self.y), self.v);
         self.v2 = arm.v2;
         self.p_l.clone_from(&arm.p_l);
 
         // 処理
-        for _ in 0..self.m {
+        let mut debt = self.debt();
+        let mut turn = 0;
+        while debt > 0.0 {
+            turn += 1;
+            if turn > self.m * 100 { break; }
             // 重心を算出
             let (s_cm, s_cnt) = self.center(&self.s, &self.t);
-            let s_cm = (s_cm.0 as i8, s_cm.1 as i8);
-            if s_cnt == 0 { break; }
             let (t_cm, t_cnt) = self.center(&self.t, &self.s);
-            let t_cm = (t_cm.0 as i8, t_cm.1 as i8);
-            let dir_st = self.dir(&s_cm, &t_cm);
 
             // 次のたこ焼きを決定
-            let mut next_tako_i = 0;
-            let mut next_tako = tako[next_tako_i];
-            let mut opt_eval = f64::MIN;
+            let mut beam1: Vec<((i8, i8), usize, f64)> = Vec::new();  // 目的地にないたこ焼きを移動する候補(たこ焼きの座標、対象のインデックス、評価値)
+            let mut beam2: Vec<((i8, i8), usize, f64)> = Vec::new();  // 目的地にあるたこ焼きを移動する候補(たこ焼きの座標、対象のインデックス、評価値)
+            let beam_width = 5;
             for i in 0..self.m {
                 // コスト算出
                 // たこ焼きまでの移動
-                let dist = self.dist(&arm.root, &tako[i]);
-                let mut cost = (if dist > arm.long { dist - arm.long } else { 0 }).max(2);
+                let (x, y) = tako[i];
+                let (x, y) = (x as usize, y as usize);
+                let takof64 = (tako[i].0 as f64, tako[i].1 as f64);
+                let dist = self.distf64(&(arm.root.0 as f64, arm.root.1 as f64), &takof64);
+                let mut cost = (if dist > arm.long as f64 { dist - arm.long as f64 } else { 0.0 }).max(2.0);
                 // たこ焼きから目的地の重心までの移動
-                let dist = self.dist(&tako[i], &t_cm);
-                cost += (if dist > arm.long { dist - arm.long } else { 0 }).max(2);
+                let dist = self.distf64(&takof64, &t_cm);
+                cost += (if dist > arm.long as f64 { dist - arm.long as f64 } else { 0.0 }).max(2.0);
+                // 目的地からたこ焼きの重心までの移動(変更後の重心)
+                let tmp_s_cm = if !self.t[x][y] {
+                    self.update_cm(&s_cm, s_cnt, &takof64)
+                } else { s_cm.clone() };  // すでに目的地にあるたこ焼きの場合は重心の変更はなし
+                let dist = self.distf64(&t_cm, &tmp_s_cm);
+                cost += (if dist > arm.long as f64 { dist - arm.long as f64 } else { 0.0 }).max(2.0);
 
                 // 利益算出
-                let (x, y) = tako[i];
-                let benefit = if !self.t[x as usize][y as usize] { self.each_debt(&tako[i], &s_cm, &dir_st) } else { 0 };
+                let benefit = if !self.t[x][y] { self.distf64(&takof64, &t_cm) } else { 0.0 };
 
-                let eval = benefit as f64 / cost as f64;
-                // println!("i: {}, tako: {:?}, eval: {}, benefit: {}, cost: {}", i, tako[i], eval, benefit, cost);
-                if eval > opt_eval {
-                    opt_eval = eval;
-                    next_tako = tako[i];
-                    next_tako_i = i;
+                let eval = benefit / cost;
+                // 目的地にないたこ焼きの場合
+                if !self.t[x][y] {
+                    if beam1.len() < beam_width {
+                        beam1.push((tako[i], i, eval));
+                    } else {
+                        let last = beam1.pop().unwrap();
+                        if last.2 < eval {
+                            beam1.push((tako[i], i, eval));
+                        } else {
+                            beam1.push(last);
+                        }
+                    }
+                    beam1.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
+                } else {  // 目的地にあるたこ焼きの場合
+                    if beam2.len() < beam_width {
+                        beam2.push((tako[i], i, cost));
+                    } else {
+                        let last = beam2.pop().unwrap();
+                        if last.2 > cost {
+                            beam2.push((tako[i], i, cost));
+                        } else {
+                            beam2.push(last);
+                        }
+                    }
+                    beam2.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
                 }
             }
+            // println!("beam1: {:?}, beam2: {:?}", beam1, beam2);
 
-            // 次の目的地を決める
+            // beam_width*2に対して、次の目的地を決める
+            let (mut next_tako, mut next_tako_i, _) = beam1[0];
             let mut next_dest = dest[0];
             let mut opt_eval = f64::MIN;
-            for i in 0..self.m {
-                // コスト算出
-                // たこ焼きから目的地までの移動
-                let dist = self.dist(&next_tako, &dest[i]);
-                let mut cost = (if dist > arm.long { dist - arm.long } else { 0 }).max(2);
-                // 目的地からたこ焼きの重心までの移動
-                let dist = self.dist(&dest[i], &s_cm);
-                cost += (if dist > arm.long { dist - arm.long } else { 0 }).max(2);
-
-                // 利益算出
-                let (x, y) = dest[i];
-                let benefit = if !self.s[x as usize][y as usize] { self.each_debt(&dest[i], &t_cm, &dir_st) } else { 0 };
-
-                let eval = benefit as f64 / cost as f64;
+            for (tako, i, _) in beam1.iter() {
+                let (dest, eval) = self.decide_dest(&dest, tako, &arm.root, arm.long, &s_cm, s_cnt, &t_cm, t_cnt);
+                // println!("eval: tako: {:?}, dest: {:?}, eval: {}", tako, dest, eval);
                 if eval > opt_eval {
                     opt_eval = eval;
-                    next_dest = dest[i];
+                    next_tako = *tako;
+                    next_tako_i = *i;
+                    next_dest = dest;
+                    // println!("next: tako: {:?}, dest: {:?}, eval: {}", next_tako, next_dest, opt_eval);
+                }
+            }
+            for (tako, i, _) in beam2.iter() {
+                let (dest, eval) = self.decide_dest(&dest, tako, &arm.root, arm.long, &s_cm, s_cnt, &t_cm, t_cnt);
+                // println!("eval: tako: {:?}, dest: {:?}, eval: {}", tako, dest, eval);
+                if eval > opt_eval {
+                    opt_eval = eval;
+                    next_tako = *tako;
+                    next_tako_i = *i;
+                    next_dest = dest;
+                    // println!("next: tako: {:?}, dest: {:?}, eval: {}", next_tako, next_dest, opt_eval);
                 }
             }
 
@@ -284,23 +316,83 @@ impl Solver {
                 tako[next_tako_i] = target;
             }
             // println!("put: {:?}", arm.leaf);
+            
+            debt = self.debt();
         }
         
     }
 
-    fn debt(&self) -> usize {
+    fn decide_dest(&self, dest: &Vec<(i8, i8)>, tako: &(i8, i8), root: &(i8, i8), long: usize, s_cm: &(f64, f64), s_cnt: usize, t_cm: &(f64, f64), t_cnt: usize) -> ((i8, i8), f64) {
+        let mut opt_eval = 0.0;
+        let mut opt_dest = dest[0];
+
+        for i in 0..self.m {
+            let tmp_dest = dest[i];
+            if self.s[tmp_dest.0 as usize][tmp_dest.1 as usize] { continue; }
+            let tmp_destf64 = (tmp_dest.0 as f64, tmp_dest.1 as f64);
+            // コスト算出
+            // たこ焼きまでの移動
+            let (x, y) = tako;
+            let (x, y) = (*x as usize, *y as usize);
+            let takof64 = (tako.0 as f64, tako.1 as f64);
+            let dist = self.distf64(&(root.0 as f64, root.1 as f64), &takof64);
+            let mut cost = (if dist > long as f64 { dist - long as f64 } else { 0.0 }).max(2.0);
+            // たこ焼きから目的地までの移動
+            let dist = self.distf64(&takof64, &tmp_destf64);
+            cost += (if dist > long as f64 { dist - long as f64 } else { 0.0 }).max(2.0);
+            // 目的地からたこ焼きの重心までの移動(変更後の重心)
+            let tmp_s_cm = if !self.t[x][y] {
+                self.update_cm(&s_cm, s_cnt, &takof64)
+            } else { s_cm.clone() };  // すでに目的地にあるたこ焼きの場合は重心の変更はなし
+            let dist = self.distf64(&tmp_destf64, &tmp_s_cm);
+            cost += (if dist > long as f64 { dist - long as f64 } else { 0.0 }).max(2.0);
+
+            // 利益算出
+            let mut benefit = if !self.t[x][y] { self.distf64(&takof64, t_cm) } else { 0.0 };
+            let update_t_cm = self.update_cm2(t_cm, t_cnt, &takof64, &tmp_destf64);
+            benefit += self.distf64(&update_t_cm, t_cm) * s_cnt as f64;
+
+            let eval = benefit / cost;
+
+            if opt_eval < eval {
+                opt_eval = eval;
+                opt_dest = tmp_dest;
+            }
+        }
+
+        (opt_dest, opt_eval)
+    }
+
+    fn update_cm(&self, cm: &(f64, f64), cnt: usize, p: &(f64, f64)) -> (f64, f64) {
+        (
+            (cm.0 * cnt as f64 - p.0) / ((cnt-1) as f64),
+            (cm.1 * cnt as f64 - p.1) / ((cnt-1) as f64),
+        )
+    }
+
+    fn update_cm2(&self, cm: &(f64, f64), cnt: usize, from_p: &(f64, f64), to_p: &(f64, f64)) -> (f64, f64) {
+        (
+            (cm.0 * cnt as f64 - to_p.0 + from_p.0) / (cnt as f64),
+            (cm.1 * cnt as f64 - to_p.1 + from_p.1) / (cnt as f64),
+        )
+    }
+
+    fn distf64(&self, p1: &(f64, f64), p2: &(f64, f64)) -> f64 {
+        (p1.0 - p2.0).abs() + (p1.1 - p2.1).abs()
+    }
+
+    fn debt(&self) -> f64 {
         // 目的地の重心からのたこ焼きの距離の合計を負債とみなす
         // ただしtと一致している場合は負債とみなさない
-        // sの重心から見て、s->tの方向と真逆は4倍、両脇は2倍、同じ方向は1倍の重みを付ける
-        let mut debt: usize = 0;
+        let mut debt= 0.0;
 
         let (s_cm, _) = self.center(&self.s, &self.t);
-        let s_cm = (s_cm.0 as i8, s_cm.1 as i8);
         for i in 0..self.n {
             for j in 0..self.n {
-                let (x, y) = (i as i8, j as i8);
+                let (x, y) = (i as f64, j as f64);
                 if self.s[i][j] && !self.t[i][j] {
-                    debt += self.each_debt(&(x, y), &s_cm, &s_cm);
+                    let dist = self.distf64(&(x, y), &s_cm);
+                    debt += if dist > 0.0 { dist } else { 1.0 };
                 }
             }
         }
