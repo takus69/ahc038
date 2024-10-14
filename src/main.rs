@@ -394,6 +394,96 @@ impl Solver {
         
     }
 
+    fn solve_v3(&mut self) {
+        // たこ焼きと目的地の場所
+        let mut tako: Vec<(i8, i8)> = self.pos(&self.s);
+        let dest: Vec<(i8, i8)> = self.pos(&self.t);
+
+        // アームの初期化
+        let (s_cm, s_cnt) = self.center(&self.s, &self.t);
+        (self.x, self.y) = s_cm;
+        let mut arm = RobotArm::new(self.n, (self.x, self.y), self.v);
+        self.v2 = arm.v2;
+        self.p_l.clone_from(&arm.p_l);
+
+        // 処理
+        for _ in 0..self.m {
+            // 重心を算出
+            let (s_cm, s_cnt) = self.center(&self.s, &self.t);
+            if s_cnt == 0 { break; }
+            let (t_cm, t_cnt) = self.center(&self.t, &self.s);
+            let dir_st = self.dir(&s_cm, &t_cm);
+
+            // 次のたこ焼きを決定
+            let mut next_tako_i = 0;
+            let mut next_tako = tako[next_tako_i];
+            let mut opt_eval = f64::MIN;
+            for i in 0..self.m {
+                // コスト算出
+                // たこ焼きまでの移動
+                let dist = self.dist(&arm.root, &tako[i]);
+                let mut cost = (if dist > arm.long { dist - arm.long } else { 0 }).max(2);
+                // たこ焼きから目的地の重心までの移動
+                let dist = self.dist(&tako[i], &t_cm);
+                cost += (if dist > arm.long { dist - arm.long } else { 0 }).max(2);
+
+                // 利益算出
+                let (x, y) = tako[i];
+                let benefit = if !self.t[x as usize][y as usize] { self.each_debt(&tako[i], &s_cm, &dir_st) } else { 0 };
+
+                let eval = benefit as f64 / cost as f64;
+                // println!("i: {}, tako: {:?}, eval: {}, benefit: {}, cost: {}", i, tako[i], eval, benefit, cost);
+                if eval > opt_eval {
+                    opt_eval = eval;
+                    next_tako = tako[i];
+                    next_tako_i = i;
+                }
+            }
+
+            // 次の目的地を決める
+            let mut next_dest = dest[0];
+            let mut opt_eval = f64::MIN;
+            for i in 0..self.m {
+                // コスト算出
+                // たこ焼きから目的地までの移動
+                let dist = self.dist(&next_tako, &dest[i]);
+                let mut cost = (if dist > arm.long { dist - arm.long } else { 0 }).max(2);
+                // 目的地からたこ焼きの重心までの移動
+                let dist = self.dist(&dest[i], &s_cm);
+                cost += (if dist > arm.long { dist - arm.long } else { 0 }).max(2);
+
+                // 利益算出
+                let (x, y) = dest[i];
+                let benefit = if !self.s[x as usize][y as usize] { self.each_debt(&dest[i], &t_cm, &dir_st) } else { 0 };
+
+                let eval = benefit as f64 / cost as f64;
+                if eval > opt_eval {
+                    opt_eval = eval;
+                    next_dest = dest[i];
+                }
+            }
+
+            let target = next_dest;
+            let start = next_tako;
+            // println!("start: {:?}, target: {:?}", start, target);
+            let ops = arm.r#move(start, &target);
+            self.op.extend(ops);
+            if start == arm.leaf {
+                self.s[start.0 as usize][start.1 as usize] = false;
+            }
+            // println!("get: {:?}", arm.leaf);
+            let next = (0, 0);
+            let ops = arm.r#move(target, &next);
+            self.op.extend(ops);
+            if target == arm.leaf {
+                self.s[target.0 as usize][target.1 as usize] = true;
+                tako[next_tako_i] = target;
+            }
+            // println!("put: {:?}", arm.leaf);
+        }
+        
+    }
+
     fn pos(&self, s: &Vec<Vec<bool>>) -> Vec<(i8, i8)> {
         let mut pos: Vec<(i8, i8)> = Vec::new();
 
@@ -581,6 +671,13 @@ fn main() {
         opt_solver = run_solver;
     }
     
+    let mut run_solver = solver.clone();
+    run_solver.solve_v3();
+    if opt_score > run_solver.score() {
+        opt_score = run_solver.score();
+        opt_solver = run_solver;
+    }
+
     opt_solver.ans();
 }
 
