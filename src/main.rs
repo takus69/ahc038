@@ -202,6 +202,7 @@ impl Solver {
 
         // アームの初期化
         let (s_cm, s_cnt) = self.center(&self.s, &self.t);
+        let s_cm = (s_cm.0 as i8, s_cm.1 as i8);
         (self.x, self.y) = s_cm;
         let mut arm = RobotArm::new(self.n, (self.x, self.y), self.v);
         self.v2 = arm.v2;
@@ -211,8 +212,10 @@ impl Solver {
         for _ in 0..self.m {
             // 重心を算出
             let (s_cm, s_cnt) = self.center(&self.s, &self.t);
+            let s_cm = (s_cm.0 as i8, s_cm.1 as i8);
             if s_cnt == 0 { break; }
             let (t_cm, t_cnt) = self.center(&self.t, &self.s);
+            let t_cm = (t_cm.0 as i8, t_cm.1 as i8);
             let dir_st = self.dir(&s_cm, &t_cm);
 
             // 次のたこ焼きを決定
@@ -285,11 +288,33 @@ impl Solver {
         
     }
 
+    fn debt(&self) -> usize {
+        // 目的地の重心からのたこ焼きの距離の合計を負債とみなす
+        // ただしtと一致している場合は負債とみなさない
+        // sの重心から見て、s->tの方向と真逆は4倍、両脇は2倍、同じ方向は1倍の重みを付ける
+        let mut debt: usize = 0;
+
+        let (s_cm, _) = self.center(&self.s, &self.t);
+        let s_cm = (s_cm.0 as i8, s_cm.1 as i8);
+        for i in 0..self.n {
+            for j in 0..self.n {
+                let (x, y) = (i as i8, j as i8);
+                if self.s[i][j] && !self.t[i][j] {
+                    debt += self.each_debt(&(x, y), &s_cm, &s_cm);
+                }
+            }
+        }
+
+        debt
+    }
+
     fn solve_v1(&mut self) {
         // たこ焼きの処理順を決定
         let (s_center, _) = self.center(&self.s, &self.t);
+        let s_center= (s_center.0 as i8, s_center.1 as i8);
         // println!("center of s: {:?}", s_center);
         let (t_center, _) = self.center(&self.t, &self.s);
+        let t_center= (t_center.0 as i8, t_center.1 as i8);
         // println!("center of t: {:?}", t_center);
         let start_dir: (i8, i8) = (
             if s_center.0 < t_center.0 { 1 } else { -1 },
@@ -401,6 +426,7 @@ impl Solver {
 
         // アームの初期化
         let (s_cm, s_cnt) = self.center(&self.s, &self.t);
+        let s_cm = (s_cm.0 as i8, s_cm.1 as i8);
         (self.x, self.y) = s_cm;
         let mut arm = RobotArm::new(self.n, (self.x, self.y), self.v);
         self.v2 = arm.v2;
@@ -410,8 +436,10 @@ impl Solver {
         for _ in 0..self.m {
             // 重心を算出
             let (s_cm, s_cnt) = self.center(&self.s, &self.t);
+            let s_cm = (s_cm.0 as i8, s_cm.1 as i8);
             if s_cnt == 0 { break; }
             let (t_cm, t_cnt) = self.center(&self.t, &self.s);
+            let t_cm = (t_cm.0 as i8, t_cm.1 as i8);
             let dir_st = self.dir(&s_cm, &t_cm);
 
             // 次のたこ焼きを決定
@@ -507,25 +535,6 @@ impl Solver {
         
     }
 
-    fn debt(&self, s: &Vec<Vec<bool>>, t: &Vec<Vec<bool>>, dir_st: &(i8, i8)) -> usize {
-        // sの重心からの距離(最小2)の和を負債とする
-        // ただしtと一致している場合は負債とみなさない
-        // sの重心から見て、s->tの方向と真逆は4倍、両脇は2倍、同じ方向は1倍の重みを付ける
-        let mut debt: usize = 0;
-
-        let (s_cm, _) = self.center(s, t);
-        for i in 0..self.n {
-            for j in 0..self.n {
-                let (x, y) = (i as i8, j as i8);
-                if s[i][j] && !t[i][j] {
-                    debt += self.each_debt(&(x, y), &s_cm, dir_st);
-                }
-            }
-        }
-
-        debt
-    }
-
     fn dir(&self, s: &(i8, i8), t: &(i8, i8)) -> (i8, i8) {
         // sからtの方向を1, 0, -1で算出
         let x = if s.0 < t.0 { 1 } else if s.0 > t.0 { -1 } else { 0 };
@@ -569,24 +578,24 @@ impl Solver {
         (p1.0.abs_diff(p2.0) + p1.1.abs_diff(p2.1)) as usize
     }
 
-    fn center(&self, s: &Vec<Vec<bool>>, t: &Vec<Vec<bool>>) -> ((i8, i8), usize) {
-        let (mut c_x, mut c_y) = (0, 0);
+    fn center(&self, s: &Vec<Vec<bool>>, t: &Vec<Vec<bool>>) -> ((f64, f64), usize) {
+        let (mut c_x, mut c_y) = (0.0, 0.0);
         let mut cnt = 0;
         for x in 0..self.n {
             for y in 0..self.n {
                 // たこ焼きと目的地が一致していない場合のみ重心を算出
                 if s[x][y] && !t[x][y] {
-                    c_x += x;
-                    c_y += y;
+                    c_x += x as f64;
+                    c_y += y as f64;
                     cnt += 1;
                 }
             }
         }
-        if cnt == 0 { return ((-1, -1), 0); }
-        c_x /= cnt;
-        c_y /= cnt;
+        if cnt == 0 { return ((-1.0, -1.0), 0); }
+        c_x /= cnt as f64;
+        c_y /= cnt as f64;
 
-        ((c_x as i8, c_y as i8), cnt)
+        ((c_x, c_y), cnt)
     }
 
     fn score(&self) -> usize {
